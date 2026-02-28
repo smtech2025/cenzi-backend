@@ -1,0 +1,15 @@
+{
+  "frontNodes": [],
+  "backNodes": [],
+  "config": {
+    "color": {
+      "name": "White",
+      "hex": "#ffffff",
+      "stroke": "#e2e8f0"
+    },
+    "size": "L",
+    "quantity": 1,
+    "rush": false,
+    "delivery": "pickup"
+  }
+}

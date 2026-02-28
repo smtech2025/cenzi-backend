@@ -1,0 +1,42 @@
+{
+  "frontNodes": [
+    {
+      "id": "text_1772219780647",
+      "type": "text",
+      "text": "YOUR TEXT",
+      "x": 109.95876014955454,
+      "y": 112.85908523707258,
+      "fontSize": 32,
+      "fill": "#ef4444",
+      "fontFamily": "Impact",
+      "rotation": 0,
+      "scaleX": 0.6297509553114035,
+      "scaleY": 0.6297509553114035
+    }
+  ],
+  "backNodes": [
+    {
+      "id": "img_1772219809258",
+      "type": "image",
+      "url": "blob:http://localhost:5173/db7c6d9b-d921-48a4-9778-36469af316ea",
+      "x": 94.70903914505946,
+      "y": 110.26459014809603,
+      "width": 150,
+      "height": 150,
+      "rotation": 0,
+      "scaleX": 0.33156939273335534,
+      "scaleY": 0.3315693927333555
+    }
+  ],
+  "config": {
+    "color": {
+      "name": "Pure White",
+      "hex": "#ffffff",
+      "stroke": "#e2e8f0"
+    },
+    "size": "M",
+    "quantity": 1,
+    "rush": false,
+    "delivery": "pickup"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "frontNodes": [
+    {
+      "id": "text_1772219564286",
+      "type": "text",
+      "text": "NEW TEXT",
+      "x": 37.3359375,
+      "y": 92,
+      "fontSize": 32,
+      "fill": "#000000",
+      "rotation": 0,
+      "scaleX": 1,
+      "scaleY": 1
+    }
+  ],
+  "backNodes": [],
+  "config": {
+    "color": {
+      "name": "White",
+      "hex": "#ffffff",
+      "stroke": "#e2e8f0"
+    },
+    "size": "L",
+    "quantity": 1,
+    "rush": false,
+    "delivery": "pickup"
+  }
+}

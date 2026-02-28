@@ -1,0 +1,12 @@
+{
+  "name": "cenzi-backend",
+  "version": "1.0.0",
+  "main": "server.js",
+  "dependencies": {
+    "express": "^4.18.0",
+    "mongoose": "^8.0.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.0.0",
+    "jsonwebtoken": "^9.0.0"
+  }
+}
