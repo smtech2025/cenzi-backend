@@ -79,6 +79,9 @@ const storageService = {
 const Settings = mongoose.model('Settings', new mongoose.Schema({
   basePrices: { budget: Number, corporate: Number, premium: Number },
   printFees: { front: Number, back: Number, left: Number, right: Number },
+  printSizeConfig: { maxAreaPx: Number, maxPriceLKR: Number }, // Area-based: A3=10000px²=1000LKR
+  sizePricingMap: mongoose.Schema.Types.Mixed,
+  shirtColorsByCategory: mongoose.Schema.Types.Mixed,
   rushFee: Number,
   deliveryFee: Number,
   whatsappNumber: String,
@@ -140,6 +143,38 @@ app.get('/api/settings', async (req, res) => {
     if (!s) s = await Settings.create({
       basePrices: { budget: 1500, corporate: 2500, premium: 3500 },
       printFees: { front: 800, back: 800, left: 400, right: 400 },
+      printSizeConfig: { maxAreaPx: 10000, maxPriceLKR: 1000 },
+      sizePricingMap: {
+        '220gsm': { budget: 1500, corporate: 2500, premium: 3500 },
+        '240gsm': { budget: 1800, corporate: 2800, premium: 3800 },
+        '280gsm': { budget: 2100, corporate: 3100, premium: 4100 },
+      },
+      shirtColorsByCategory: {
+        adults: [
+          { name: 'Pure White', hex: '#ffffff', stroke: '#d1d5db' },
+          { name: 'Onyx Black', hex: '#111827', stroke: '#000000' },
+          { name: 'Navy Blue', hex: '#1e3a8a', stroke: '#172554' },
+          { name: 'Heather Gray', hex: '#9ca3af', stroke: '#6b7280' },
+          { name: 'Forest Green', hex: '#166534', stroke: '#14532d' },
+          { name: 'Burgundy', hex: '#7f1d1d', stroke: '#6b0000' },
+        ],
+        teens: [
+          { name: 'Sky Blue', hex: '#0ea5e9', stroke: '#0284c7' },
+          { name: 'Hot Pink', hex: '#ec4899', stroke: '#be185d' },
+          { name: 'Electric Purple', hex: '#a855f7', stroke: '#7c3aed' },
+          { name: 'Lime Green', hex: '#84cc16', stroke: '#65a30d' },
+          { name: 'Bright Orange', hex: '#f97316', stroke: '#ea580c' },
+          { name: 'Pure White', hex: '#ffffff', stroke: '#d1d5db' },
+        ],
+        kids: [
+          { name: 'Sunshine Yellow', hex: '#fbbf24', stroke: '#f59e0b' },
+          { name: 'Candy Red', hex: '#ef4444', stroke: '#dc2626' },
+          { name: 'Ocean Blue', hex: '#3b82f6', stroke: '#2563eb' },
+          { name: 'Grass Green', hex: '#22c55e', stroke: '#16a34a' },
+          { name: 'Cloud White', hex: '#f3f4f6', stroke: '#d1d5db' },
+          { name: 'Coral Pink', hex: '#fb7185', stroke: '#f43f5e' },
+        ],
+      },
       rushFee: 1500,
       deliveryFee: 500,
       whatsappNumber: '94741336159',
@@ -306,6 +341,34 @@ app.get('/api/stats', authMiddleware, async (req, res) => {
       Order.aggregate([{ $group: { _id: '$status', count: { $sum: 1 } } }]),
       Order.aggregate([{ $group: { _id: '$design.material', count: { $sum: 1 } } }]),
     ]);
+
+    // Download order assets as zip (install archiver: npm install archiver)
+const archiver = require('archiver');
+const fs = require('fs');
+const path = require('path');
+
+app.get('/api/orders/:id/assets', authMiddleware, async (req, res) => {
+  try {
+    const order = await Order.findById(req.params.id);
+    if (!order) return res.status(404).json({ message: 'Order not found' });
+    
+    const orderDir = path.join(__dirname, 'uploads', 'orders', order.orderId);
+    
+    if (!fs.existsSync(orderDir)) {
+      return res.status(404).json({ message: 'No files found for this order' });
+    }
+    
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename=cenzi-${order.orderId}-assets.zip`);
+    
+    const archive = archiver('zip', { zlib: { level: 9 } });
+    archive.pipe(res);
+    archive.directory(orderDir, false);
+    archive.finalize();
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
 
     // Orders per last 7 days
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
