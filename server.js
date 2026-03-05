@@ -9,6 +9,10 @@ const fs = require('fs');
 dotenv.config();
 
 const app = express();
+const dbState = {
+  connected: false,
+  connectionError: '',
+};
 
 const allowedOrigins = [
   'https://cenzi.shop',
@@ -48,6 +52,19 @@ const authMiddleware = (req, res, next) => {
     return res.status(401).json({ message: 'Invalid token' });
   }
 };
+
+function requireDatabase(res) {
+  if (dbState.connected) return true;
+
+  res.status(503).json({
+    message: 'Database unavailable. Check MONGO_URI or start MongoDB and retry.',
+    database: {
+      connected: false,
+      error: dbState.connectionError || 'MongoDB connection not established',
+    },
+  });
+  return false;
+}
 
 const storageService = {
   saveOrderFiles: async (orderId, projectJson) => {
@@ -107,6 +124,7 @@ const settingsSchema = new mongoose.Schema({
   basePrices: { budget: Number, corporate: Number, premium: Number },
   printFees: { front: Number, back: Number, left: Number, right: Number },
   printSizeConfig: { maxAreaPx: Number, maxPriceLKR: Number },
+  printFee: Number,
   sizePricingMap: mongoose.Schema.Types.Mixed,
   shirtColorsByCategory: mongoose.Schema.Types.Mixed,
   rushFee: Number,
@@ -128,6 +146,8 @@ const orderSchema = new mongoose.Schema(
     },
     design: {
       color: String,
+      sizeCategory: String,
+      sizeUnit: String,
       sizeQuantities: Object,
       style: String,
       material: String,
@@ -161,7 +181,8 @@ async function getOrCreateSettings() {
     settings = await Settings.create({
       basePrices: { budget: 1500, corporate: 2500, premium: 3500 },
       printFees: { front: 800, back: 800, left: 400, right: 400 },
-      printSizeConfig: { maxAreaPx: 10000, maxPriceLKR: 1000 },
+      printSizeConfig: { maxAreaPx: 10000, maxPriceLKR: 400 },
+      printFee: 0,
       sizePricingMap: {
         '220gsm': { budget: 1500, corporate: 2500, premium: 3500 },
         '240gsm': { budget: 1800, corporate: 2800, premium: 3800 },
@@ -202,6 +223,30 @@ async function getOrCreateSettings() {
         { minQty: 50, discountPercent: 10 },
       ],
     });
+  } else {
+    let shouldSave = false;
+
+    if (typeof settings.printFee !== 'number') {
+      settings.printFee = 0;
+      shouldSave = true;
+    }
+
+    if (!settings.printSizeConfig) {
+      settings.printSizeConfig = { maxAreaPx: 10000, maxPriceLKR: 400 };
+      shouldSave = true;
+    } else if (
+      settings.printSizeConfig.maxPriceLKR === undefined ||
+      settings.printSizeConfig.maxPriceLKR === null ||
+      settings.printSizeConfig.maxPriceLKR === 1000
+    ) {
+      settings.printSizeConfig.maxPriceLKR = 400;
+      shouldSave = true;
+    }
+
+    if (shouldSave) {
+      settings.markModified('printSizeConfig');
+      await settings.save();
+    }
   }
 
   return settings;
@@ -225,6 +270,7 @@ app.get('/api/auth/me', authMiddleware, (req, res) => {
 
 app.get('/api/settings', async (req, res) => {
   try {
+    if (!requireDatabase(res)) return;
     const settings = await getOrCreateSettings();
     res.json(settings);
   } catch (err) {
@@ -235,6 +281,7 @@ app.get('/api/settings', async (req, res) => {
 
 app.put('/api/settings', authMiddleware, async (req, res) => {
   try {
+    if (!requireDatabase(res)) return;
     const current = await getOrCreateSettings();
     const settings = await Settings.findByIdAndUpdate(current._id, req.body, {
       new: true,
@@ -248,6 +295,7 @@ app.put('/api/settings', authMiddleware, async (req, res) => {
 
 app.post('/api/orders', async (req, res) => {
   try {
+    if (!requireDatabase(res)) return;
     const { customer, design, pricing, projectJson } = req.body;
     const count = await Order.countDocuments();
     const orderId = `CENZI-${1000 + count + 1}`;
@@ -277,6 +325,7 @@ app.post('/api/orders', async (req, res) => {
 
 app.get('/api/orders', authMiddleware, async (req, res) => {
   try {
+    if (!requireDatabase(res)) return;
     const { status, search, page = 1, limit = 100 } = req.query;
     const query = {};
 
@@ -313,6 +362,7 @@ app.get('/api/orders', authMiddleware, async (req, res) => {
 
 app.get('/api/orders/:id', authMiddleware, async (req, res) => {
   try {
+    if (!requireDatabase(res)) return;
     const order = await Order.findById(req.params.id);
     if (!order) return res.status(404).json({ message: 'Order not found' });
 
@@ -327,6 +377,7 @@ app.get('/api/orders/:id', authMiddleware, async (req, res) => {
 
 app.get('/api/orders/:id/assets', authMiddleware, async (req, res) => {
   try {
+    if (!requireDatabase(res)) return;
     const order = await Order.findById(req.params.id);
     if (!order) return res.status(404).json({ message: 'Order not found' });
 
@@ -338,6 +389,7 @@ app.get('/api/orders/:id/assets', authMiddleware, async (req, res) => {
 
 app.put('/api/orders/:id/status', authMiddleware, async (req, res) => {
   try {
+    if (!requireDatabase(res)) return;
     const order = await Order.findById(req.params.id);
     if (!order) return res.status(404).json({ message: 'Order not found' });
 
@@ -353,6 +405,7 @@ app.put('/api/orders/:id/status', authMiddleware, async (req, res) => {
 
 app.put('/api/orders/:id/notes', authMiddleware, async (req, res) => {
   try {
+    if (!requireDatabase(res)) return;
     const order = await Order.findByIdAndUpdate(
       req.params.id,
       { notes: req.body.notes },
@@ -368,6 +421,7 @@ app.put('/api/orders/:id/notes', authMiddleware, async (req, res) => {
 
 app.put('/api/orders/bulk/status', authMiddleware, async (req, res) => {
   try {
+    if (!requireDatabase(res)) return;
     const { orderIds, status } = req.body;
     if (!orderIds || !Array.isArray(orderIds) || !status) {
       return res.status(400).json({ message: 'Invalid payload' });
@@ -386,6 +440,7 @@ app.put('/api/orders/bulk/status', authMiddleware, async (req, res) => {
 
 app.delete('/api/orders/:id', authMiddleware, async (req, res) => {
   try {
+    if (!requireDatabase(res)) return;
     const order = await Order.findByIdAndDelete(req.params.id);
     if (!order) return res.status(404).json({ message: 'Order not found' });
 
@@ -402,6 +457,7 @@ app.delete('/api/orders/:id', authMiddleware, async (req, res) => {
 
 app.get('/api/stats', authMiddleware, async (req, res) => {
   try {
+    if (!requireDatabase(res)) return;
     const [totalOrders, totalRevenue, byStatus, byMaterial, pendingOrders, recentOrders] =
       await Promise.all([
         Order.countDocuments(),
@@ -442,17 +498,52 @@ app.get('/api/stats', authMiddleware, async (req, res) => {
 });
 
 app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  res.json({
+    status: dbState.connected ? 'ok' : 'degraded',
+    timestamp: new Date().toISOString(),
+    database: {
+      connected: dbState.connected,
+      error: dbState.connectionError || null,
+    },
+  });
 });
 
 const PORT = process.env.PORT || 5000;
+const server = app.listen(PORT, () => {
+  console.log(`CENZI backend listening on port ${PORT}`);
+});
+
 mongoose
-  .connect(process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/cenzi')
+  .connect(process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/cenzi', {
+    serverSelectionTimeoutMS: 5000,
+  })
   .then(() => {
-    console.log(`CENZI backend connected on port ${PORT}`);
-    app.listen(PORT);
+    dbState.connected = true;
+    dbState.connectionError = '';
+    console.log('MongoDB connected');
   })
   .catch((err) => {
+    dbState.connected = false;
+    dbState.connectionError = err.message;
     console.error('MongoDB connection failed:', err.message);
-    process.exit(1);
+    console.error('Backend is running in degraded mode until MongoDB becomes available.');
   });
+
+mongoose.connection.on('connected', () => {
+  dbState.connected = true;
+  dbState.connectionError = '';
+});
+
+mongoose.connection.on('disconnected', () => {
+  dbState.connected = false;
+  dbState.connectionError = 'MongoDB disconnected';
+});
+
+mongoose.connection.on('error', (err) => {
+  dbState.connected = false;
+  dbState.connectionError = err.message;
+});
+
+server.on('error', (err) => {
+  console.error('Server failed to start:', err.message);
+});
