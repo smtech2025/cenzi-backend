@@ -9,22 +9,37 @@ const fs = require('fs');
 dotenv.config();
 
 const app = express();
-app.use(cors({
-  origin: ['https://cenzi.shop', 'https://www.cenzi.shop'],
-  credentials: true
-}));
+
+const allowedOrigins = [
+  'https://cenzi.shop',
+  'https://www.cenzi.shop',
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+];
+
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+        return;
+      }
+
+      callback(new Error('Not allowed by CORS'));
+    },
+    credentials: true,
+  })
+);
 app.use(express.json({ limit: '50mb' }));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use('/api/uploads', express.static(path.join(__dirname, 'uploads')));
 
-// ==========================================
-// AUTH MIDDLEWARE
-// ==========================================
 const authMiddleware = (req, res, next) => {
   const auth = req.headers.authorization;
   if (!auth || !auth.startsWith('Bearer ')) {
     return res.status(401).json({ message: 'Unauthorized' });
   }
+
   try {
     const decoded = jwt.verify(auth.split(' ')[1], process.env.JWT_SECRET || 'cenzi_secret');
     req.admin = decoded;
@@ -34,9 +49,6 @@ const authMiddleware = (req, res, next) => {
   }
 };
 
-// ==========================================
-// FILE STORAGE SERVICE
-// ==========================================
 const storageService = {
   saveOrderFiles: async (orderId, projectJson) => {
     const dir = path.join(__dirname, 'uploads', 'orders', orderId.toString());
@@ -45,10 +57,9 @@ const storageService = {
 
     const assetPaths = [];
 
-    if (projectJson && projectJson.nodes) {
-      for (const view in projectJson.nodes) {
-        const viewNodes = projectJson.nodes[view];
-        for (const node of viewNodes) {
+    if (projectJson?.nodes) {
+      for (const view of Object.keys(projectJson.nodes)) {
+        for (const node of projectJson.nodes[view]) {
           if (node.type === 'image' && node.url && node.url.startsWith('data:')) {
             const base64Data = node.url.split(';base64,').pop();
             const extension = node.url.split(';')[0].split('/')[1] || 'png';
@@ -59,7 +70,7 @@ const storageService = {
             assetPaths.push({
               view,
               name: fileName,
-              url: `/uploads/orders/${orderId}/original_assets/${fileName}`
+              url: `/uploads/orders/${orderId}/original_assets/${fileName}`,
             });
           }
         }
@@ -70,77 +81,84 @@ const storageService = {
     fs.writeFileSync(path.join(dir, 'project.json'), JSON.stringify(projectJson, null, 2));
 
     return { json: jsonPath, assets: assetPaths };
-  }
+  },
+  getOrderAssetManifest(orderDocumentId) {
+    const orderDir = path.join(__dirname, 'uploads', 'orders', orderDocumentId.toString());
+    const assetsDir = path.join(orderDir, 'original_assets');
+    const projectPath = path.join(orderDir, 'project.json');
+
+    const assets = fs.existsSync(assetsDir)
+      ? fs.readdirSync(assetsDir).map((fileName) => ({
+          name: fileName,
+          url: `/uploads/orders/${orderDocumentId}/original_assets/${fileName}`,
+        }))
+      : [];
+
+    return {
+      projectJson: fs.existsSync(projectPath)
+        ? `/uploads/orders/${orderDocumentId}/project.json`
+        : null,
+      assets,
+    };
+  },
 };
 
-// ==========================================
-// DATABASE MODELS
-// ==========================================
-const Settings = mongoose.model('Settings', new mongoose.Schema({
+const settingsSchema = new mongoose.Schema({
   basePrices: { budget: Number, corporate: Number, premium: Number },
   printFees: { front: Number, back: Number, left: Number, right: Number },
-  printSizeConfig: { maxAreaPx: Number, maxPriceLKR: Number }, // Area-based: A3=10000px²=1000LKR
+  printSizeConfig: { maxAreaPx: Number, maxPriceLKR: Number },
   sizePricingMap: mongoose.Schema.Types.Mixed,
   shirtColorsByCategory: mongoose.Schema.Types.Mixed,
   rushFee: Number,
   deliveryFee: Number,
   whatsappNumber: String,
   bankDetails: String,
-  discountTiers: Array
-}));
-
-const OrderSchema = new mongoose.Schema({
-  orderId: { type: String, unique: true },
-  customer: {
-    name: String,
-    phone: String,
-    address: String,
-    deliveryMethod: String
-  },
-  design: {
-    color: String,
-    sizeQuantities: Object,
-    style: String,
-    material: String,
-    projectJsonData: mongoose.Schema.Types.Mixed,
-    originalAssets: Array,
-    config: mongoose.Schema.Types.Mixed,
-  },
-  pricing: {
-    perShirt: Number,
-    total: Number,
-    discount: Number
-  },
-  status: { type: String, default: 'Awaiting WhatsApp Slip' },
-  notes: { type: String, default: '' },
-  statusHistory: [{
-    status: String,
-    changedAt: { type: Date, default: Date.now }
-  }]
-}, { timestamps: true });
-
-const Order = mongoose.model('Order', OrderSchema);
-
-// ==========================================
-// API ROUTES
-// ==========================================
-
-// ── AUTH ──
-app.post('/api/auth/login', (req, res) => {
-  const adminPw = process.env.ADMIN_PASSWORD || 'admin123';
-  if (req.body.password === adminPw) {
-    const token = jwt.sign({ role: 'admin' }, process.env.JWT_SECRET || 'cenzi_secret', { expiresIn: '7d' });
-    res.json({ token });
-  } else {
-    res.status(401).json({ message: 'Invalid credentials' });
-  }
+  discountTiers: Array,
 });
 
-// ── SETTINGS ──
-app.get('/api/settings', async (req, res) => {
-  try {
-    let s = await Settings.findOne();
-    if (!s) s = await Settings.create({
+const orderSchema = new mongoose.Schema(
+  {
+    orderId: { type: String, unique: true },
+    customer: {
+      name: String,
+      phone: String,
+      address: String,
+      deliveryMethod: String,
+      email: String,
+    },
+    design: {
+      color: String,
+      sizeQuantities: Object,
+      style: String,
+      material: String,
+      projectJsonData: mongoose.Schema.Types.Mixed,
+      originalAssets: Array,
+      config: mongoose.Schema.Types.Mixed,
+    },
+    pricing: {
+      perShirt: Number,
+      total: Number,
+      discount: Number,
+    },
+    status: { type: String, default: 'Awaiting WhatsApp Slip' },
+    notes: { type: String, default: '' },
+    statusHistory: [
+      {
+        status: String,
+        changedAt: { type: Date, default: Date.now },
+      },
+    ],
+  },
+  { timestamps: true }
+);
+
+const Settings = mongoose.model('Settings', settingsSchema);
+const Order = mongoose.model('Order', orderSchema);
+
+async function getOrCreateSettings() {
+  let settings = await Settings.findOne();
+  if (!settings) {
+    settings = await Settings.create({
       basePrices: { budget: 1500, corporate: 2500, premium: 3500 },
       printFees: { front: 800, back: 800, left: 400, right: 400 },
       printSizeConfig: { maxAreaPx: 10000, maxPriceLKR: 1000 },
@@ -179,9 +197,36 @@ app.get('/api/settings', async (req, res) => {
       deliveryFee: 500,
       whatsappNumber: '94741336159',
       bankDetails: 'CENZI PRINTS\nBank: Commercial Bank\nAcc: 0987654321\nName: CENZI Prints',
-      discountTiers: [{ minQty: 15, discountPercent: 5 }, { minQty: 50, discountPercent: 10 }]
+      discountTiers: [
+        { minQty: 15, discountPercent: 5 },
+        { minQty: 50, discountPercent: 10 },
+      ],
     });
-    res.json(s);
+  }
+
+  return settings;
+}
+
+app.post('/api/auth/login', (req, res) => {
+  const adminPw = process.env.ADMIN_PASSWORD || 'admin123';
+  if (req.body.password === adminPw) {
+    const token = jwt.sign({ role: 'admin' }, process.env.JWT_SECRET || 'cenzi_secret', {
+      expiresIn: '7d',
+    });
+    res.json({ token });
+  } else {
+    res.status(401).json({ message: 'Invalid credentials' });
+  }
+});
+
+app.get('/api/auth/me', authMiddleware, (req, res) => {
+  res.json({ role: req.admin.role || 'admin' });
+});
+
+app.get('/api/settings', async (req, res) => {
+  try {
+    const settings = await getOrCreateSettings();
+    res.json(settings);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Server Error' });
@@ -190,14 +235,17 @@ app.get('/api/settings', async (req, res) => {
 
 app.put('/api/settings', authMiddleware, async (req, res) => {
   try {
-    const s = await Settings.findOneAndUpdate({}, req.body, { new: true, upsert: true });
-    res.json(s);
-  } catch (err) {
+    const current = await getOrCreateSettings();
+    const settings = await Settings.findByIdAndUpdate(current._id, req.body, {
+      new: true,
+      runValidators: false,
+    });
+    res.json(settings);
+  } catch {
     res.status(500).json({ message: 'Failed to save settings' });
   }
 });
 
-// ── ORDERS ──
 app.post('/api/orders', async (req, res) => {
   try {
     const { customer, design, pricing, projectJson } = req.body;
@@ -209,7 +257,7 @@ app.post('/api/orders', async (req, res) => {
       customer,
       design,
       pricing,
-      statusHistory: [{ status: 'Awaiting WhatsApp Slip' }]
+      statusHistory: [{ status: 'Awaiting WhatsApp Slip' }],
     });
 
     order.design.projectJsonData = projectJson;
@@ -227,13 +275,12 @@ app.post('/api/orders', async (req, res) => {
   }
 });
 
-// Get all orders (admin)
 app.get('/api/orders', authMiddleware, async (req, res) => {
   try {
     const { status, search, page = 1, limit = 100 } = req.query;
     const query = {};
 
-    if (status) query.status = status;
+    if (status && status !== 'all') query.status = status;
     if (search) {
       query.$or = [
         { orderId: { $regex: search, $options: 'i' } },
@@ -242,29 +289,53 @@ app.get('/api/orders', authMiddleware, async (req, res) => {
       ];
     }
 
-    const orders = await Order.find(query)
-      .sort({ createdAt: -1 })
-      .limit(Number(limit))
-      .skip((Number(page) - 1) * Number(limit));
+    const [orders, total] = await Promise.all([
+      Order.find(query)
+        .sort({ createdAt: -1 })
+        .limit(Number(limit))
+        .skip((Number(page) - 1) * Number(limit)),
+      Order.countDocuments(query),
+    ]);
 
-    res.json(orders);
-  } catch (err) {
+    res.json({
+      items: orders,
+      pagination: {
+        total,
+        page: Number(page),
+        limit: Number(limit),
+        pages: Math.ceil(total / Number(limit)),
+      },
+    });
+  } catch {
     res.status(500).json({ message: 'Failed to fetch orders' });
   }
 });
 
-// Get single order
 app.get('/api/orders/:id', authMiddleware, async (req, res) => {
   try {
     const order = await Order.findById(req.params.id);
     if (!order) return res.status(404).json({ message: 'Order not found' });
-    res.json(order);
-  } catch (err) {
+
+    res.json({
+      ...order.toObject(),
+      files: storageService.getOrderAssetManifest(order._id),
+    });
+  } catch {
     res.status(500).json({ message: 'Failed to fetch order' });
   }
 });
 
-// Update status
+app.get('/api/orders/:id/assets', authMiddleware, async (req, res) => {
+  try {
+    const order = await Order.findById(req.params.id);
+    if (!order) return res.status(404).json({ message: 'Order not found' });
+
+    res.json(storageService.getOrderAssetManifest(order._id));
+  } catch {
+    res.status(500).json({ message: 'Failed to fetch order assets' });
+  }
+});
+
 app.put('/api/orders/:id/status', authMiddleware, async (req, res) => {
   try {
     const order = await Order.findById(req.params.id);
@@ -275,12 +346,11 @@ app.put('/api/orders/:id/status', authMiddleware, async (req, res) => {
     await order.save();
 
     res.json(order);
-  } catch (err) {
+  } catch {
     res.status(500).json({ message: 'Failed to update status' });
   }
 });
 
-// Update notes
 app.put('/api/orders/:id/notes', authMiddleware, async (req, res) => {
   try {
     const order = await Order.findByIdAndUpdate(
@@ -288,14 +358,14 @@ app.put('/api/orders/:id/notes', authMiddleware, async (req, res) => {
       { notes: req.body.notes },
       { new: true }
     );
+
     if (!order) return res.status(404).json({ message: 'Order not found' });
     res.json(order);
-  } catch (err) {
+  } catch {
     res.status(500).json({ message: 'Failed to save notes' });
   }
 });
 
-// Bulk status update
 app.put('/api/orders/bulk/status', authMiddleware, async (req, res) => {
   try {
     const { orderIds, status } = req.body;
@@ -309,86 +379,60 @@ app.put('/api/orders/bulk/status', authMiddleware, async (req, res) => {
     );
 
     res.json({ updated: orderIds.length, status });
-  } catch (err) {
+  } catch {
     res.status(500).json({ message: 'Bulk update failed' });
   }
 });
 
-// Delete order
 app.delete('/api/orders/:id', authMiddleware, async (req, res) => {
   try {
     const order = await Order.findByIdAndDelete(req.params.id);
     if (!order) return res.status(404).json({ message: 'Order not found' });
 
-    // Optionally clean up files
     const orderDir = path.join(__dirname, 'uploads', 'orders', order._id.toString());
     if (fs.existsSync(orderDir)) {
       fs.rmSync(orderDir, { recursive: true, force: true });
     }
 
     res.json({ message: 'Order deleted', orderId: order.orderId });
-  } catch (err) {
+  } catch {
     res.status(500).json({ message: 'Failed to delete order' });
   }
 });
 
-// Analytics / Stats endpoint
 app.get('/api/stats', authMiddleware, async (req, res) => {
   try {
-    const [totalOrders, totalRevenue, byStatus, byMaterial] = await Promise.all([
-      Order.countDocuments(),
-      Order.aggregate([{ $group: { _id: null, total: { $sum: '$pricing.total' } } }]),
-      Order.aggregate([{ $group: { _id: '$status', count: { $sum: 1 } } }]),
-      Order.aggregate([{ $group: { _id: '$design.material', count: { $sum: 1 } } }]),
-    ]);
+    const [totalOrders, totalRevenue, byStatus, byMaterial, pendingOrders, recentOrders] =
+      await Promise.all([
+        Order.countDocuments(),
+        Order.aggregate([{ $group: { _id: null, total: { $sum: '$pricing.total' } } }]),
+        Order.aggregate([{ $group: { _id: '$status', count: { $sum: 1 } } }]),
+        Order.aggregate([{ $group: { _id: '$design.material', count: { $sum: 1 } } }]),
+        Order.countDocuments({ status: { $nin: ['Delivered', 'Completed'] } }),
+        Order.find({}).sort({ createdAt: -1 }).limit(5).select('orderId status pricing createdAt customer'),
+      ]);
 
-    // Download order assets as zip (install archiver: npm install archiver)
-const archiver = require('archiver');
-const fs = require('fs');
-const path = require('path');
-
-app.get('/api/orders/:id/assets', authMiddleware, async (req, res) => {
-  try {
-    const order = await Order.findById(req.params.id);
-    if (!order) return res.status(404).json({ message: 'Order not found' });
-    
-    const orderDir = path.join(__dirname, 'uploads', 'orders', order.orderId);
-    
-    if (!fs.existsSync(orderDir)) {
-      return res.status(404).json({ message: 'No files found for this order' });
-    }
-    
-    res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Disposition', `attachment; filename=cenzi-${order.orderId}-assets.zip`);
-    
-    const archive = archiver('zip', { zlib: { level: 9 } });
-    archive.pipe(res);
-    archive.directory(orderDir, false);
-    archive.finalize();
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-});
-
-    // Orders per last 7 days
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-    const recentOrders = await Order.aggregate([
+    const dailyTrend = await Order.aggregate([
       { $match: { createdAt: { $gte: sevenDaysAgo } } },
       {
         $group: {
           _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
           count: { $sum: 1 },
-          revenue: { $sum: '$pricing.total' }
-        }
+          revenue: { $sum: '$pricing.total' },
+        },
       },
-      { $sort: { _id: 1 } }
+      { $sort: { _id: 1 } },
     ]);
 
     res.json({
       totalOrders,
+      pendingOrders,
       totalRevenue: totalRevenue[0]?.total || 0,
+      averageOrderValue: totalOrders ? (totalRevenue[0]?.total || 0) / totalOrders : 0,
       byStatus,
       byMaterial,
+      dailyTrend,
       recentOrders,
     });
   } catch (err) {
@@ -397,21 +441,18 @@ app.get('/api/orders/:id/assets', authMiddleware, async (req, res) => {
   }
 });
 
-// Health check
-app.get('/api/health', (req, res) => {
+app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// ==========================================
-// START SERVER
-// ==========================================
 const PORT = process.env.PORT || 5000;
-mongoose.connect(process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/cenzi')
+mongoose
+  .connect(process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/cenzi')
   .then(() => {
-    console.log(`✅ CENZI Backend connected — listening on port ${PORT}`);
+    console.log(`CENZI backend connected on port ${PORT}`);
     app.listen(PORT);
   })
-  .catch(err => {
-    console.error('❌ MongoDB connection failed:', err.message);
+  .catch((err) => {
+    console.error('MongoDB connection failed:', err.message);
     process.exit(1);
   });
